@@ -24,10 +24,21 @@ cabal run bastion-break
 cabal run yours-craft
 ```
 
-Want to try **2-player Sky Ace** right away? *(Requires Node.js for the headless Rapier3D physics sidecar, plus `npm --prefix ./frontend install` once if `frontend/node_modules` is absent.)*
+Want to try **2-player Sky Ace** right away? Multiplayer uses **Node.js (≥ 18)** for the headless Rapier3D physics sidecar:
 
 ```bash
-# Open http://localhost:3000/?player=1 and http://localhost:3000/?player=2 in two tabs
+# 1. Install Node.js & npm if you don't already have them:
+#    Ubuntu / Debian:  sudo apt install nodejs npm
+#    macOS (Homebrew): brew install node
+#    (or download from https://nodejs.org)
+
+# 2. Install the Rapier3D sidecar dependency (once):
+npm --prefix ./frontend install
+
+# 3. Start the 2-player server, then open two browser tabs:
+#    http://localhost:3000/?player=1  and  http://localhost:3000/?player=2
+#    (Or on the same Wi-Fi/LAN, Player 2 can open http://<your-ip-or-hostname>:3000/?player=2
+#     in any browser—no Haskell or Node.js needed on the second machine!)
 cabal run sky-ace -- --local-multi
 ```
 
