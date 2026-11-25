@@ -68,30 +68,31 @@ When writing a game in EventHorizon, you never touch:
 
 #### Single-Player: Two Pure Functions
 
-You define your own **type-safe identifier types**—**`bid`** for 3D bodies (e.g., `data MyBody = Player | Tree Int | Bullet Int`) and **`tid`** for timers (e.g., `data MyTimer = SpawnWave | BulletExpire Int`, or `Void` if unused)—and pass two pure functions to `play`:
+You define your own pure game state and **type-safe identifier types**—for 3D bodies and timers (`Void` if unused)—and write just an initial state plus two pure functions:
 
 ```haskell
 import Game.EventHorizon
 
-play
-  :: (Ord bid, Ord tid, Show bid, Show tid)
-  => Config
-  -> world
-  -> (world -> Scene bid tid)                           -- Declarative 3D SceneTree, physics, timers & HUD
-  -> (Event bid tid -> Snapshot bid -> world -> world)  -- Pure reaction: runs ONLY on discrete events
-  -> IO ()
+-- User-defined domain types (no JSON instances or string IDs needed)
+data World   = ...                             -- your pure game state
+data BodyId  = Player | Tree Int | Bullet Int  deriving (Eq, Ord, Show)
+data TimerId = SpawnWave | BulletExpire Int    deriving (Eq, Ord, Show)
+
+initWorld :: World
+render    :: World -> Scene BodyId TimerId                     -- declarative 3D scene, physics, timers & HUD
+step      :: Event BodyId TimerId -> Snapshot BodyId -> World -> World  -- runs ONLY on discrete events
+
+main :: IO ()
+main = play (defaultConfig "My Game") initWorld render step
 ```
 
-When you also want one-shot physics or audio actions (`ApplyImpulse`, `ApplyTorqueImpulse`, `SetVelocity`, `Teleport`, `PlaySound`), use `playWith`:
+When you also want one-shot physics or audio actions (`ApplyImpulse`, `ApplyTorqueImpulse`, `SetVelocity`, `Teleport`, `PlaySound`), return a list of commands and run with `playWith`:
 
 ```haskell
-playWith
-  :: (Ord bid, Ord tid, Show bid, Show tid)
-  => Config
-  -> world
-  -> (world -> Scene bid tid)
-  -> (Event bid tid -> Snapshot bid -> world -> (world, [Command bid]))
-  -> IO ()
+step :: Event BodyId TimerId -> Snapshot BodyId -> World -> (World, [Command BodyId])
+
+main :: IO ()
+main = playWith (defaultConfig "My Game") initWorld render step
 ```
 
 Along the way you get idiomatic 3D math and scene combinators:
@@ -99,20 +100,23 @@ Along the way you get idiomatic 3D math and scene combinators:
 - **`Quat` & `Mesh`**: `Semigroup` / `Monoid` (`<>`, `mempty`), plus `(#>)` to rotate a vector by a quaternion
 - **Typed collision matching**: `matchPair`, `matchPred`, `matchEq`, and `only` so unordered collisions pattern-match exhaustively without string prefixes
 
-#### Multi-Player: Still Just Pure Functions
+#### Multi-Player: Three Pure Functions
 
-To make a game multi-player, add a user-defined **`pid`** (**player ID** type, e.g., `data Pilot = Pilot1 | Pilot2`) alongside **`bid`** and **`tid`**, and split your render function into the shared 3D world (`WorldScene`) and each player's viewport (`PlayerView`: camera + HUD):
+To make a game multi-player, add a user-defined player ID type and split `render` into the shared 3D world and each player's viewport (camera + HUD):
 
 ```haskell
-data Game pid bid tid world = Game
-  { gameInit  :: world
-  , gameWorld :: world -> WorldScene bid tid
-  , gameView  :: pid -> world -> PlayerView bid
-  , gameStep  :: MultiEvent pid bid tid -> Snapshot bid -> world -> (world, [MultiCommand pid bid])
-  }
+data PlayerId = Pilot1 | Pilot2 deriving (Eq, Ord, Show, Enum, Bounded)
+
+initWorld   :: World
+renderWorld :: World -> WorldScene BodyId TimerId              -- shared 3D world, physics & timers
+renderView  :: PlayerId -> World -> PlayerView BodyId          -- per-player camera & HUD
+step        :: MultiEvent PlayerId BodyId TimerId
+            -> Snapshot BodyId
+            -> World
+            -> (World, [MultiCommand PlayerId BodyId])
 ```
 
-You can test the entire multiplayer game in pure Haskell unit tests, run it locally across two browser tabs (`playLocalMulti`), or deploy it as an authoritative server (`serveMulti`) with predicting rollback clients (`connectMulti`)—without changing a single line of game logic.
+You can test `step` directly in pure Haskell unit tests, run the game locally/over LAN (`playLocalMulti`), or deploy it as an authoritative server (`serveMulti`) with predicting rollback clients (`connectMulti`)—without changing a single line of game logic.
 
 ---
 
@@ -125,11 +129,11 @@ Giving the programmer a purely functional, local-feeling model while sustaining 
 EventHorizon splits the game cleanly at the boundary between **continuous dynamics** and **discrete game logic**:
 
 - **Continuous 60 Hz runtime (Three.js + Rapier3D)**: Rigid-body dynamics, collisions, constraints, kinematic interpolation, camera tracking, and declarative continuous controllers (`WalkDrive`, `VelocityDrive`, `ForceDrive`, `SeekDrive`, `FlightDrive`) execute continuously at 60 FPS inside the browser/physics engine.
-- **Discrete pure Haskell logic**: Haskell wakes *only* when something discrete happens—`KeyDown`/`KeyUp` (OS key-repeat suppressed, held keys auto-released on window blur), `MouseDown`/`MouseUp` (with built-in 3D raycast picking `Maybe (bid, Vec3)`), `CollisionStart`/`CollisionEnd`, or `TimerFired`. Each event arrives with an immutable `Snapshot bid` containing simulation time (`snapTime`) and live physics poses/velocities.
+- **Discrete pure Haskell logic**: Haskell wakes *only* when something discrete happens—`KeyDown`/`KeyUp` (OS key-repeat suppressed, held keys auto-released on window blur), `MouseDown`/`MouseUp` (with built-in 3D raycast picking `Maybe (BodyId, Vec3)`), `CollisionStart`/`CollisionEnd`, or `TimerFired`. Each event arrives with an immutable `Snapshot BodyId` containing simulation time (`snapTime`) and live physics poses/velocities.
 
 ### 2. Type-Safe Wire Interning & Delta Snapshots
 
-The programmer's `pid`, `bid`, and `tid` ADTs never need `ToJSON`/`FromJSON` instances:
+Your `PlayerId`, `BodyId`, and `TimerId` ADTs never need `ToJSON`/`FromJSON` instances:
 
 - [Protocol.hs](src/Game/EventHorizon/Protocol.hs) maintains bidirectional intern tables mapping user tags to compact integer wire IDs (with bounded retired-ID retention so in-flight WebSocket messages decode safely without leaking memory).
 - Simultaneous physics/timer events from a single step are batched and stamped with `sceneEpoch` so stale events from a previous level/restart are silently discarded.
@@ -140,7 +144,7 @@ The programmer's `pid`, `bid`, and `tid` ADTs never need `ToJSON`/`FromJSON` ins
 
 When a world holds tens of thousands of entities (like a voxel landscape), rebuilding a flat list of bodies and re-diffing all $N$ entries on every click would stall the game.
 
-EventHorizon solves this with a plain 3-constructor `SceneTree bid` (`EmptyTree | OneBody | Branch`) paired with a transparent pointer-equality memoizer in [Memo.hs](src/Game/EventHorizon/Memo.hs):
+EventHorizon solves this with a plain 3-constructor `SceneTree BodyId` (`EmptyTree | OneBody | Branch`) paired with a transparent pointer-equality memoizer in [Memo.hs](src/Game/EventHorizon/Memo.hs):
 
 ```haskell
 memo  :: (a -> b) -> (a -> b)
