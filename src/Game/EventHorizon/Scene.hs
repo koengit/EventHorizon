@@ -38,6 +38,7 @@ module Game.EventHorizon.Scene
   , Camera (..)
   , fixedCamera
   , followCamera
+  , firstPersonCamera
   , Light (..)
   , Timer (..)
   , HudAnchor (..)
@@ -218,6 +219,9 @@ data Drive
   = NoDrive
   | -- | Horizontal walking velocity @(vx, 0, vz)@ preserving vertical gravity.
     WalkDrive !Vec3
+  | -- | Camera-relative horizontal walking velocity @(forward, strafe)@ preserving vertical gravity.
+    -- Positive forward moves in the active camera's horizontal look direction; positive strafe moves right.
+    CameraWalkDrive !Double !Double
   | -- | Direct world-space linear and angular velocity.
     VelocityDrive !Vec3 !Vec3
   | -- | Continuous world-space force and torque (respects mass, friction, and knockback).
@@ -311,6 +315,15 @@ data Camera bid
       , camSmooth :: !Double
       , camFov :: !Double
       }
+  | -- | First-person mouse-look camera attached to @camTarget@ using browser Pointer Lock.
+    -- Mouse deltas rotate yaw/pitch directly in the browser at 0 ms latency without waking Haskell.
+    FirstPersonCamera
+      { camTarget :: !bid
+      , camOffset :: !Vec3
+      , camSensitivity :: !Double
+      , camPitchLimits :: !(Double, Double)
+      , camFov :: !Double
+      }
   deriving (Eq, Show)
 
 fixedCamera :: Vec3 -> Vec3 -> Camera bid
@@ -318,6 +331,16 @@ fixedCamera pos look = FixedCamera pos look 60
 
 followCamera :: bid -> Vec3 -> Vec3 -> Camera bid
 followCamera target off lookOff = FollowCamera target off lookOff False 7.0 60
+
+firstPersonCamera :: bid -> Vec3 -> Camera bid
+firstPersonCamera target eyeOff =
+  FirstPersonCamera
+    { camTarget = target
+    , camOffset = eyeOff
+    , camSensitivity = 0.0022
+    , camPitchLimits = (-1.45, 1.45)
+    , camFov = 70
+    }
 
 -- | Scene lights.
 data Light

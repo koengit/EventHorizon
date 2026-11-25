@@ -381,6 +381,10 @@ function applyDrivesAndKinematics(dt) {
     if (d.type === 'walk') {
       const curVel = rb.linvel();
       rb.setLinvel({ x: d.vel[0], y: curVel.y, z: d.vel[2] }, true);
+    } else if (d.type === 'cameraWalk') {
+      const curVel = rb.linvel();
+      // Default heading -Z forward, +X right in headless mode
+      rb.setLinvel({ x: d.strafe, y: curVel.y, z: -d.forward }, true);
     } else if (d.type === 'velocity') {
       rb.setLinvel({ x: d.linVel[0], y: d.linVel[1], z: d.linVel[2] }, true);
       rb.setAngvel({ x: d.angVel[0], y: d.angVel[1], z: d.angVel[2] }, true);

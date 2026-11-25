@@ -967,6 +967,22 @@ testYoursCraft = do
     "Space emits upward ApplyImpulse on Player"
     (any (\c -> case c of ApplyImpulse YoursCraft.Player (Vec3 _ vy _) -> vy > 0; _ -> False) jumpCmds)
 
+  -- First-person mouse-look camera & CameraWalkDrive defaults + V toggle
+  assertBool
+    "YoursCraft defaults to FirstPersonCamera"
+    (case sceneCamera (YoursCraft.renderVoxelMemo v0) of FirstPersonCamera {} -> True; _ -> False)
+  let (vWalk, _) = YoursCraft.stepVoxel (KeyDown (KeyChar 'w')) emptySnapshot v0
+      playerBodyWalk = filter ((== YoursCraft.Player) . bodyId) (allSceneBodies (YoursCraft.renderVoxelMemo vWalk))
+  assertBool
+    "Holding W in YoursCraft sets positive forward CameraWalkDrive"
+    (case playerBodyWalk of
+       [b] -> case bodyDrive b of CameraWalkDrive fwd strafe -> fwd > 0 && abs strafe < 1e-6; _ -> False
+       _ -> False)
+  let (v3rd, _) = YoursCraft.stepVoxel (KeyDown (KeyChar 'v')) emptySnapshot v0
+  assertBool
+    "Pressing V toggles YoursCraft to FollowCamera"
+    (case sceneCamera (YoursCraft.renderVoxelMemo v3rd) of FollowCamera {} -> True; _ -> False)
+
 main :: IO ()
 main = do
   testMathOperators

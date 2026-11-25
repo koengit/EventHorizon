@@ -247,10 +247,10 @@ cabal run yours-craft -- --no-memo     # start in naive flat rebuild mode
 cabal run yours-craft -- --bench       # run No-Diff vs Flat-Diff vs Memo-Tree benchmark
 ```
 
-- **WASD / Arrow Keys**: Walk · **Space**: Jump (`ApplyImpulse`) · **Q / E**: Rotate camera
-- **Left Click**: Break block · **Right Click**: Place block on clicked face
+- **Click canvas**: Lock mouse for first-person look (`Esc` to release) · **WASD / Arrow Keys**: Camera-relative walk · **Space**: Jump (`ApplyImpulse`)
+- **Left Click**: Break block at crosshair · **Right Click**: Place block on clicked face
 - **1–6**: Select block (Grass, Dirt, Stone, Wood, Brick, Glowstone)
-- **M**: Toggle live between Memoized Chunked `SceneTree` and Naive Flat Rebuild · **R**: Reset world
+- **V**: Toggle 1st-Person Mouse-Look / 3rd-Person Follow (`Q`/`E` rotate in 3rd-person) · **M**: Toggle Memoized Chunked `SceneTree` vs. Naive Flat Rebuild · **R**: Reset world
 
 ---
 

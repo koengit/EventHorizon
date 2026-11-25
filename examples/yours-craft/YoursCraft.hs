@@ -66,6 +66,7 @@ data VoxelState = VoxelState
   , vsHeldKeys :: !(Set Key)
   , vsSelected :: !BlockKind
   , vsUseMemo :: !Bool
+  , vsFirstPerson :: !Bool
   , vsCamYaw :: !Double
   , vsPlacedCount :: !Int
   , vsBrokenCount :: !Int
@@ -162,6 +163,7 @@ initialVoxelWorld radius =
         , vsHeldKeys = Set.empty
         , vsSelected = Brick
         , vsUseMemo = True
+        , vsFirstPerson = True
         , vsCamYaw = 0.0
         , vsPlacedCount = 0
         , vsBrokenCount = 0
@@ -226,9 +228,11 @@ stepVoxel ev snap vs = case ev of
   EngineReady -> (vs, [])
   KeyDown (KeyChar 'r') ->
     let fresh = initialVoxelWorld (vsWorldRadius vs)
-     in (fresh {vsEpoch = vsEpoch vs + 1, vsUseMemo = vsUseMemo vs}, [])
+     in (fresh {vsEpoch = vsEpoch vs + 1, vsUseMemo = vsUseMemo vs, vsFirstPerson = vsFirstPerson vs}, [])
   KeyDown (KeyChar 'm') ->
     (vs {vsUseMemo = not (vsUseMemo vs)}, [PlaySound (tone WaveSine 580 0.06 0.12)])
+  KeyDown (KeyChar 'v') ->
+    (vs {vsFirstPerson = not (vsFirstPerson vs)}, [PlaySound (tone WaveSine 460 0.05 0.10)])
   KeyDown (KeyChar 'q') ->
     (vs {vsCamYaw = vsCamYaw vs - (pi / 6)}, [])
   KeyDown (KeyChar 'e') ->
@@ -306,12 +310,10 @@ baseScene :: VoxelState -> SceneTree VoxelBody -> Scene VoxelBody Void
 baseScene vs tree =
   let camRot = quatFromEuler (Vec3 0 (vsCamYaw vs) 0)
       camOff = camRot #> Vec3 0 8.5 12.5
-   in defaultScene
-        { sceneEpoch = vsEpoch vs
-        , sceneGravity = Vec3 0 (-28) 0
-        , sceneBackground = Color 0.52 0.78 0.96
-        , sceneFog = Just (Color 0.60 0.82 0.96, 35, 110)
-        , sceneCamera =
+      cam =
+        if vsFirstPerson vs
+          then firstPersonCamera Player (Vec3 0 0.65 0)
+          else
             FollowCamera
               { camTarget = Player
               , camOffset = camOff
@@ -320,6 +322,12 @@ baseScene vs tree =
               , camSmooth = 9.0
               , camFov = 60
               }
+   in defaultScene
+        { sceneEpoch = vsEpoch vs
+        , sceneGravity = Vec3 0 (-28) 0
+        , sceneBackground = Color 0.52 0.78 0.96
+        , sceneFog = Just (Color 0.60 0.82 0.96, 35, 110)
+        , sceneCamera = cam
         , sceneLights =
             [ HemisphereLight (Color 0.82 0.92 1.0) (Color 0.28 0.34 0.22) 0.78
             , DirectionalLight (Color 1.0 0.96 0.86) 1.25 (Vec3 26 48 22)
@@ -388,23 +396,28 @@ playerBody vs =
         , bodyRestitution = 0.0
         , bodyLockRot = True
         , bodyEvents = False
-        , bodyDrive = computeWalkDrive (vsCamYaw vs) (vsHeldKeys vs)
+        , bodyDrive = computeWalkDrive (vsHeldKeys vs)
         }
 
-computeWalkDrive :: Double -> Set Key -> Drive
-computeWalkDrive yaw keys =
+computeWalkDrive :: Set Key -> Drive
+computeWalkDrive keys =
   let held k = Set.member k keys
-      fwdIn = (if held (KeyChar 'w') || held KeyUpArrow then 1.0 else 0.0) + (if held (KeyChar 's') || held KeyDownArrow then (-1.0) else 0.0)
-      rightIn = (if held (KeyChar 'd') || held KeyRightArrow then 1.0 else 0.0) + (if held (KeyChar 'a') || held KeyLeftArrow then (-1.0) else 0.0)
-      rot = quatFromEuler (Vec3 0 yaw 0)
-      fwd = forwardOf rot
-      right = rightOf rot
-      dir = vNorm (fwdIn *^ fwd + rightIn *^ right)
-   in WalkDrive (8.2 *^ dir)
+      fwdIn =
+        (if held (KeyChar 'w') || held KeyUpArrow then 1.0 else 0.0)
+          + (if held (KeyChar 's') || held KeyDownArrow then (-1.0) else 0.0)
+      rightIn =
+        (if held (KeyChar 'd') || held KeyRightArrow then 1.0 else 0.0)
+          + (if held (KeyChar 'a') || held KeyLeftArrow then (-1.0) else 0.0)
+      len = sqrt (fwdIn * fwdIn + rightIn * rightIn)
+      speed = 8.2
+   in if len < 1e-6
+        then CameraWalkDrive 0 0
+        else CameraWalkDrive (speed * fwdIn / len) (speed * rightIn / len)
 
 buildHud :: VoxelState -> [HudElement]
 buildHud vs =
   let modeLabel = if vsUseMemo vs then "Memoized Chunked Tree" else "Naive Flat Rebuild"
+      camLabel = if vsFirstPerson vs then "1st-Person Mouse-Look" else "3rd-Person Follow"
       leftHud =
         HudText TopLeft $
           "YoursCraft   |   Blocks: "
@@ -417,8 +430,10 @@ buildHud vs =
             <> T.pack (show (vsBrokenCount vs))
       rightHud =
         HudText TopRight $
-          "Block: [" <> blockName (vsSelected vs) <> "]   |   Render: " <> modeLabel
+          "Block: [" <> blockName (vsSelected vs) <> "]   |   Cam: " <> camLabel <> "   |   Render: " <> modeLabel
       controlsHud =
         HudText BottomCenter $
-          "WASD: Walk   ·   Space: Jump   ·   Q/E: Rotate Cam   ·   Left Click: Break   ·   Right Click: Place   ·   1-6: Block   ·   M: Toggle Memo   ·   R: Reset"
-   in [leftHud, rightHud, controlsHud]
+          if vsFirstPerson vs
+            then "Click: Look (Esc: Free)   ·   WASD: Walk   ·   Space: Jump   ·   L/R Click: Break/Place   ·   1-6: Block   ·   V: 3rd-Person   ·   M: Memo   ·   R: Reset"
+            else "WASD: Walk   ·   Space: Jump   ·   Q/E: Rotate Cam   ·   L/R Click: Break/Place   ·   1-6: Block   ·   V: 1st-Person   ·   M: Memo   ·   R: Reset"
+   in [leftHud, rightHud, controlsHud] <> [HudCrosshair | vsFirstPerson vs]

@@ -512,6 +512,12 @@ driveToJSON d = case d of
   NoDrive -> Aeson.object ["type" .= ("none" :: Text)]
   WalkDrive v ->
     Aeson.object ["type" .= ("walk" :: Text), "vel" .= vec3ToJSON v]
+  CameraWalkDrive fwd strafe ->
+    Aeson.object
+      [ "type" .= ("cameraWalk" :: Text)
+      , "forward" .= fwd
+      , "strafe" .= strafe
+      ]
   VelocityDrive lv av ->
     Aeson.object
       [ "type" .= ("velocity" :: Text)
@@ -604,6 +610,19 @@ encodeCamera tbl cam = case cam of
             , "lookOffset" .= vec3ToJSON loff
             , "local" .= loc
             , "smooth" .= sm
+            , "fov" .= fov
+            ]
+        , tbl'
+        )
+  FirstPersonCamera tgt off sens (minP, maxP) fov ->
+    let (wid, tbl') = internId tgt tbl
+     in ( Aeson.object
+            [ "type" .= ("firstPerson" :: Text)
+            , "target" .= wid
+            , "offset" .= vec3ToJSON off
+            , "sensitivity" .= sens
+            , "minPitch" .= minP
+            , "maxPitch" .= maxP
             , "fov" .= fov
             ]
         , tbl'

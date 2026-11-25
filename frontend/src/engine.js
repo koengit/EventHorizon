@@ -295,6 +295,10 @@ let localTick = 0;
 let cameraSpec = null;
 let cameraInitialized = false;
 let currentLookAt = new THREE.Vector3(0, 0, 0);
+let fpYaw = 0;
+let fpPitch = 0;
+let pointerLocked = false;
+let hiddenTargetId = null;
 let primaryDirLight = null;
 let primaryDirLightOffset = new THREE.Vector3(25, 45, 20);
 
@@ -320,8 +324,12 @@ function updateStatusBadge() {
   if (!wsConnected) {
     statusBadge.textContent = 'Disconnected (reload to reconnect)';
   } else {
+    const lockHint =
+      cameraSpec && cameraSpec.type === 'firstPerson' && !pointerLocked
+        ? ' · Click to look'
+        : '';
     statusBadge.textContent =
-      `EventHorizon · Events: ${haskellEventCount} · Bodies: ${bodies.size} · Last patch: ${lastPatchBytes} B`;
+      `EventHorizon · Events: ${haskellEventCount} · Bodies: ${bodies.size} · Last patch: ${lastPatchBytes} B${lockHint}`;
   }
 }
 
@@ -339,6 +347,9 @@ function resetWorld(gravityArr) {
   authHasFirstPose = false;
   localTick = 0;
   cameraInitialized = false;
+  fpYaw = 0;
+  fpPitch = 0;
+  hiddenTargetId = null;
 
   if (eventQueue) {
     eventQueue.free();
@@ -737,12 +748,32 @@ function applyTimers(timersSpec) {
   }
 }
 
+function restoreHiddenCameraTarget() {
+  if (hiddenTargetId !== null) {
+    const prev = bodies.get(hiddenTargetId);
+    if (prev && prev.meshObj) {
+      prev.meshObj.visible = true;
+    }
+    hiddenTargetId = null;
+  }
+}
+
 function applyCameraSpec(spec) {
+  const prevType = cameraSpec ? cameraSpec.type : null;
   cameraSpec = spec;
   if (spec && typeof spec.fov === 'number' && Math.abs(camera.fov - spec.fov) > 1e-3) {
     camera.fov = spec.fov;
     camera.updateProjectionMatrix();
   }
+  if (!spec || spec.type !== 'firstPerson') {
+    restoreHiddenCameraTarget();
+    if (prevType === 'firstPerson' && document.pointerLockElement === canvas) {
+      try {
+        document.exitPointerLock();
+      } catch (_) {}
+    }
+  }
+  updateStatusBadge();
 }
 
 function applyFog(fog) {
@@ -1212,6 +1243,26 @@ function applyDrivesAndKinematics(dt) {
     if (d.type === 'walk') {
       const curVel = rb.linvel();
       rb.setLinvel({ x: d.vel[0], y: curVel.y, z: d.vel[2] }, true);
+    } else if (d.type === 'cameraWalk') {
+      let fwdX = 0;
+      let fwdZ = -1;
+      if (cameraSpec && cameraSpec.type === 'firstPerson') {
+        fwdX = -Math.sin(fpYaw);
+        fwdZ = -Math.cos(fpYaw);
+      } else {
+        camera.getWorldDirection(tmpVecA);
+        const hLen = Math.hypot(tmpVecA.x, tmpVecA.z);
+        if (hLen > 1e-5) {
+          fwdX = tmpVecA.x / hLen;
+          fwdZ = tmpVecA.z / hLen;
+        }
+      }
+      const rightX = -fwdZ;
+      const rightZ = fwdX;
+      const vx = fwdX * d.forward + rightX * d.strafe;
+      const vz = fwdZ * d.forward + rightZ * d.strafe;
+      const curVel = rb.linvel();
+      rb.setLinvel({ x: vx, y: curVel.y, z: vz }, true);
     } else if (d.type === 'velocity') {
       rb.setLinvel({ x: d.linVel[0], y: d.linVel[1], z: d.linVel[2] }, true);
       rb.setAngvel({ x: d.angVel[0], y: d.angVel[1], z: d.angVel[2] }, true);
@@ -1370,6 +1421,31 @@ function syncVisuals(dt = FIXED_DT, interpAlpha = 1.0) {
 function updateCamera(dt) {
   if (!cameraSpec) return;
 
+  if (cameraSpec.type === 'firstPerson') {
+    const target = bodies.get(cameraSpec.target);
+    if (!target) return;
+    if (hiddenTargetId !== cameraSpec.target) {
+      restoreHiddenCameraTarget();
+      target.meshObj.visible = false;
+      hiddenTargetId = cameraSpec.target;
+    }
+    const tPos = target.meshObj.position;
+    const off = cameraSpec.offset || [0, 0.65, 0];
+    camera.position.set(tPos.x + off[0], tPos.y + off[1], tPos.z + off[2]);
+    camera.rotation.order = 'YXZ';
+    camera.rotation.set(fpPitch, fpYaw, 0);
+    cameraInitialized = true;
+
+    if (primaryDirLight) {
+      primaryDirLight.position.copy(tPos).add(primaryDirLightOffset);
+      primaryDirLight.target.position.copy(tPos);
+      primaryDirLight.target.updateMatrixWorld();
+    }
+    return;
+  }
+
+  restoreHiddenCameraTarget();
+
   if (cameraSpec.type === 'fixed') {
     camera.position.set(
       cameraSpec.pos[0],
@@ -1463,15 +1539,43 @@ window.addEventListener('blur', () => {
 const raycaster = new THREE.Raycaster();
 const ndcPointer = new THREE.Vector2();
 
+document.addEventListener('pointerlockchange', () => {
+  pointerLocked = document.pointerLockElement === canvas;
+  updateStatusBadge();
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!cameraSpec || cameraSpec.type !== 'firstPerson' || !pointerLocked) return;
+  const sens = typeof cameraSpec.sensitivity === 'number' ? cameraSpec.sensitivity : 0.0022;
+  const minP = typeof cameraSpec.minPitch === 'number' ? cameraSpec.minPitch : -1.45;
+  const maxP = typeof cameraSpec.maxPitch === 'number' ? cameraSpec.maxPitch : 1.45;
+  fpYaw -= e.movementX * sens;
+  fpPitch = THREE.MathUtils.clamp(fpPitch - e.movementY * sens, minP, maxP);
+});
+
 canvas.addEventListener('pointerdown', (e) => {
   ensureAudio();
-  ndcPointer.x = (e.clientX / window.innerWidth) * 2 - 1;
-  ndcPointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  const isFirstPerson = cameraSpec && cameraSpec.type === 'firstPerson';
+  if (isFirstPerson && !pointerLocked) {
+    try {
+      canvas.requestPointerLock();
+    } catch (_) {}
+    return;
+  }
+  if (isFirstPerson && pointerLocked) {
+    ndcPointer.set(0, 0);
+  } else {
+    ndcPointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+    ndcPointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  }
   raycaster.setFromCamera(ndcPointer, camera);
   const hits = raycaster.intersectObjects(bodiesGroup.children, true);
   let hitPayload = null;
   for (const h of hits) {
     if (h.object && h.object.userData && h.object.userData.bodyId !== undefined) {
+      if (isFirstPerson && h.object.userData.bodyId === cameraSpec.target) {
+        continue;
+      }
       hitPayload = {
         id: h.object.userData.bodyId,
         point: [h.point.x, h.point.y, h.point.z],
