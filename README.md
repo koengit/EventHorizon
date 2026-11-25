@@ -1,16 +1,14 @@
 # EventHorizon `v0.0.1-alpha`
 
-> **Status: Very Early Alpha (Experimental)** — EventHorizon is an active research/engineering prototype exploring purely functional event-driven 3D games, pointer-memoized tree diffing, and deterministic rollback multiplayer. Expect breaking API changes as the design evolves.
+> **Status: Very Early Alpha (Experimental)** — EventHorizon is an early-stage research and engineering prototype exploring purely functional event-driven 3D games, pointer-memoized tree diffing, and deterministic rollback multiplayer. Expect breaking API changes as the design evolves.
 
-**Purely functional, event-driven 3D games and rigid-body physics in Haskell**, backed by a self-contained **Three.js** + **Rapier3D** runtime.
-
-In **EventHorizon**, your Haskell game logic **never runs on 60 Hz frame ticks**. Three.js and Rapier3D simulate and render continuously at 60 FPS, waking your pure Haskell update function only when a discrete event occurs—player input, a physics collision/sensor trigger, or a declared timer.
+**Write 3D action, puzzle, demolition, voxel, and networked multiplayer games in pure Haskell—without frame loops, mutable scene graphs, manual diffing, or networking code.**
 
 ---
 
-## Quick Start: Run the Example Games
+## Quick Start: Play the Example Games
 
-Requires **GHC ≥ 9.6** and **Cabal ≥ 3.0**. The browser frontend (`static/bundle.js`) is pre-built, so no Node.js setup is needed for single-player.
+Requires **GHC ≥ 9.6** and **Cabal ≥ 3.0**. The browser runtime (`static/bundle.js`) is pre-built, so no Node.js setup is needed for single-player.
 
 ```bash
 # 1. Sky Ace — 3D flight & dogfight → open http://localhost:3000
@@ -24,35 +22,42 @@ cabal run bastion-break
 
 # 4. YoursCraft — Minecraft-like 3D voxel builder & diffing stress test → open http://localhost:3003
 cabal run yours-craft
-# Compare no-diff vs flat-diff vs memoized chunked SceneTree diffing (up to ~40,000 blocks):
-cabal run yours-craft -- --bench
 ```
 
-Want to try **2-player Sky Ace** right away? *(Requires Node.js installed for the headless Rapier3D physics sidecar, plus `npm --prefix ./frontend install` once if `frontend/node_modules` is not present.)*
+Want to try **2-player Sky Ace** right away? *(Requires Node.js for the headless Rapier3D physics sidecar, plus `npm --prefix ./frontend install` once if `frontend/node_modules` is absent.)*
 
 ```bash
 # Open http://localhost:3000/?player=1 and http://localhost:3000/?player=2 in two tabs
 cabal run sky-ace -- --local-multi
 ```
 
-Want to build **Sky Ace** from scratch step-by-step? Follow the **[7-Step Sky Ace Tutorial](tutorial/sky-ace/TUTORIAL.md)** and run any stage directly:
+Want to build **Sky Ace** from scratch? Follow the **[7-Step Sky Ace Tutorial](tutorial/sky-ace/TUTORIAL.md)** and run any stage directly:
 
 ```bash
 cabal run sky-ace-tutorial -- 1   # Steps 1..7 on http://localhost:3000
 ```
 
-See [Example Games](#example-games) below for full controls and networked server/client multiplayer instructions.
-
 ---
 
-## Core Idea
+## The Programmer Experience
 
-### Single-Player (`play` / `playWith`)
+### What You Do *Not* Have to Care About
 
-Write a 3D action, puzzle, or demolition game with two pure functions parameterized by your own **type-safe identifier types**:
+When writing a game in EventHorizon, you never touch:
 
-- **`bid`** — your **body ID** type identifying 3D physics/visual entities (e.g., `data MyBody = Player | Tree Int | Bullet Int`)
-- **`tid`** — your **timer ID** type identifying scheduled timers (e.g., `data MyTimer = SpawnWave | BulletExpire Int`, or `Void` if unused)
+- **60 Hz frame loops or `dt` integration** — your Haskell code never runs on animation frames.
+- **WebGL, shaders, Three.js handles, or GPU memory management** — you return a pure declarative 3D tree.
+- **Physics engine plumbing or imperative rigid-body handles** — you declare colliders, collision masks, and continuous `Drive`s.
+- **Stringly-typed entity IDs or JSON serialization** — you tag bodies, timers, and players with your own ordinary Haskell ADTs.
+- **Manual diffing or dirty flags for huge worlds** — persistent `Map`/`IntMap` subtrees stay $O(\Delta \log N)$ automatically via `memo` and `mapTree`/`intMapTree`.
+- **Sockets, client-side prediction, rollback buffers, or state sync** — you write a multiplayer game as a pure local state machine over player IDs.
+- **External audio files** — procedural Web Audio sound effects (`sweep`, `tone`, `noise`) are plain data values.
+
+### What You Actually Write
+
+#### Single-Player: Two Pure Functions
+
+You define your own **type-safe identifier types**—**`bid`** for 3D bodies (e.g., `data MyBody = Player | Tree Int | Bullet Int`) and **`tid`** for timers (e.g., `data MyTimer = SpawnWave | BulletExpire Int`, or `Void` if unused)—and pass two pure functions to `play`:
 
 ```haskell
 import Game.EventHorizon
@@ -62,11 +67,11 @@ play
   => Config
   -> world
   -> (world -> Scene bid tid)                           -- Declarative 3D SceneTree, physics, timers & HUD
-  -> (Event bid tid -> Snapshot bid -> world -> world)  -- Pure update: runs ONLY on discrete events
+  -> (Event bid tid -> Snapshot bid -> world -> world)  -- Pure reaction: runs ONLY on discrete events
   -> IO ()
 ```
 
-Use `playWith` when your update function also emits one-shot physics or audio commands (`ApplyImpulse`, `ApplyTorqueImpulse`, `SetVelocity`, `Teleport`, `PlaySound`):
+When you also want one-shot physics or audio actions (`ApplyImpulse`, `ApplyTorqueImpulse`, `SetVelocity`, `Teleport`, `PlaySound`), use `playWith`:
 
 ```haskell
 playWith
@@ -78,9 +83,14 @@ playWith
   -> IO ()
 ```
 
-### Multi-User (`Game pid bid tid world`)
+Along the way you get idiomatic 3D math and scene combinators:
+- **`Vec3`**: `Num` (`+`, `-`, `negate`) plus vector operators (`^+^`, `^-^`, `*^`, `^*`, `^/`, `<.>`, `><`)
+- **`Quat` & `Mesh`**: `Semigroup` / `Monoid` (`<>`, `mempty`), plus `(#>)` to rotate a vector by a quaternion
+- **Typed collision matching**: `matchPair`, `matchPred`, `matchEq`, and `only` so unordered collisions pattern-match exhaustively without string prefixes
 
-Turn a pure game into a networked multi-player game with **zero networking or rollback code** by adding a user-defined **`pid`** (**player ID** type, e.g., `data Pilot = Pilot1 | Pilot2`) alongside **`bid`** (body ID) and **`tid`** (timer ID), and separating the shared 3D world (`WorldScene`) from each player's viewport (`PlayerView`: camera + HUD):
+#### Multi-Player: Still Just Pure Functions
+
+To make a game multi-player, add a user-defined **`pid`** (**player ID** type, e.g., `data Pilot = Pilot1 | Pilot2`) alongside **`bid`** and **`tid`**, and split your render function into the shared 3D world (`WorldScene`) and each player's viewport (`PlayerView`: camera + HUD):
 
 ```haskell
 data Game pid bid tid world = Game
@@ -91,26 +101,49 @@ data Game pid bid tid world = Game
   }
 ```
 
-Run the exact same `Game` locally across browser tabs (`playLocalMulti`) or over a network (`serveMulti` + `connectMulti`) with client-side prediction, deterministic Rapier3D snapshot rollback, sound deduplication, and visual error smoothing.
+You can test the entire multiplayer game in pure Haskell unit tests, run it locally across two browser tabs (`playLocalMulti`), or deploy it as an authoritative server (`serveMulti`) with predicting rollback clients (`connectMulti`)—without changing a single line of game logic.
 
 ---
 
-## Highlights
+## How It Works Under the Hood
 
-- **Event-driven hybrid execution**: Continuous 60 Hz physics, drives (`WalkDrive`, `VelocityDrive`, `ForceDrive`, `SeekDrive`, `FlightDrive`), and kinematic motion run in Rapier3D/Three.js; Haskell wakes only on discrete `KeyDown`/`KeyUp`, `MouseDown`/`MouseUp` (with 3D raycast picking), `CollisionStart`/`CollisionEnd`, and `TimerFired` events.
-- **Type-safe user-defined IDs (`pid`, `bid`, `tid`)**: Define ordinary ADTs for players (`pid`), 3D bodies (`bid`), and timers (`tid`) with `deriving (Eq, Ord, Show)`. The protocol transparently interns them to compact integer wire IDs—no string prefix parsing or JSON boilerplate.
-- **Ergonomic 3D math & mesh algebra**: `Vec3` supports `Num` (`+`, `-`, `negate`) and vector operators (`^+^`, `^-^`, `*^`, `^*`, `^/`, `<.>`, `><`); `Quat` and `Mesh` form `Semigroup`/`Monoid` (`<>`, `mempty`), with `(#>)` for quaternion-vector rotation.
-- **$O(\Delta \log N)$ incremental scene diffing**: Compose scenes as a `SceneTree` using `memo`/`memo2`/`memo3` and `mapTree`/`intMapTree`. Untouched persistent subtrees reuse their previous heap pointers via 2-generation + weak `StableName` memoization and skip diffing in $O(1)$ (with rotation-safe reconciliation for `Data.Map`).
-- **Input-only multiplayer & rollback**: Authoritative Haskell + headless Node Rapier3D server broadcasts stamped player inputs and lightweight periodic confirmations; predicting clients roll back pure `world` values in $O(1)$ alongside Rapier3D snapshots and smoothly decay visual corrections.
-- **Zero-asset procedural Web Audio**: Synthesize frequency sweeps, tones, and filtered noise directly in the browser via `PlaySound`.
+Giving the programmer a purely functional, local-feeling model while sustaining 60 FPS 3D physics, tens of thousands of bodies, and smooth multiplayer rests on four architectural mechanisms:
 
----
+### 1. Hybrid Continuous/Discrete Split (Zero Frame Ticks in Haskell)
 
-## Performance: With vs. Without Incremental Diffing
+EventHorizon splits the game cleanly at the boundary between **continuous dynamics** and **discrete game logic**:
 
-### Real-World Stress Test: YoursCraft (`cabal run yours-craft -- --bench`)
+- **Continuous 60 Hz runtime (Three.js + Rapier3D)**: Rigid-body dynamics, collisions, constraints, kinematic interpolation, camera tracking, and declarative continuous controllers (`WalkDrive`, `VelocityDrive`, `ForceDrive`, `SeekDrive`, `FlightDrive`) execute continuously at 60 FPS inside the browser/physics engine.
+- **Discrete pure Haskell logic**: Haskell wakes *only* when something discrete happens—`KeyDown`/`KeyUp` (OS key-repeat suppressed, held keys auto-released on window blur), `MouseDown`/`MouseUp` (with built-in 3D raycast picking `Maybe (bid, Vec3)`), `CollisionStart`/`CollisionEnd`, or `TimerFired`. Each event arrives with an immutable `Snapshot bid` containing simulation time (`snapTime`) and live physics poses/velocities.
 
-Every time you click to place or break a single block in **YoursCraft**, the world is stored as nested persistent maps of 8×8 chunks (`Map ChunkCoord (Map VoxelCoord BlockKind)`). Below is the measured cost per click (render + diff + JSON wire encoding) across 1,706 to 44,865 blocks (GHC 9.6 `-O2`):
+### 2. Type-Safe Wire Interning & Delta Snapshots
+
+The programmer's `pid`, `bid`, and `tid` ADTs never need `ToJSON`/`FromJSON` instances:
+
+- [Protocol.hs](src/Game/EventHorizon/Protocol.hs) maintains bidirectional intern tables mapping user tags to compact integer wire IDs (with bounded retired-ID retention so in-flight WebSocket messages decode safely without leaking memory).
+- Simultaneous physics/timer events from a single step are batched and stamped with `sceneEpoch` so stale events from a previous level/restart are silently discarded.
+- On the return path, the browser skips all `Static` and `Sensor` bodies and transmits **only dynamic/kinematic bodies that actually moved**, which Haskell merges into a connection-local snapshot cache.
+- In [engine.js](frontend/src/engine.js), repeated Three.js geometries and materials are cached and shared across bodies, and `bodyEvents` defaults to `False` for static geometry so static-vs-static contacts never generate useless events.
+
+### 3. Transparent $O(\Delta \log N)$ Incremental Diffing (`memo` + `SceneTree`)
+
+When a world holds tens of thousands of entities (like a voxel landscape), rebuilding a flat list of bodies and re-diffing all $N$ entries on every click would stall the game.
+
+EventHorizon solves this with a plain 3-constructor `SceneTree bid` (`EmptyTree | OneBody | Branch`) paired with a transparent pointer-equality memoizer in [Memo.hs](src/Game/EventHorizon/Memo.hs):
+
+```haskell
+memo  :: (a -> b) -> (a -> b)
+memo2 :: (a -> b -> c) -> (a -> b -> c)
+memo3 :: (a -> b -> c -> d) -> (a -> b -> c -> d)
+```
+
+1. **2-generation + weak `StableName` cache**: `memo` keys results by the GHC `StableName` of `(f, arg)` in WHNF. The engine flips a 2-generation hot table (`advanceMemoGen`) after every diff (bounding memory cleanly), backed by a `System.Mem.Weak` cache keyed on live inputs so deep untouched subtrees in persistent trees remain hot across non-local mutations without retaining dead data.
+2. **Zero-friction container mappers**: `mapTree` and `intMapTree` walk `Data.Map.Internal` / `Data.IntMap.Internal` using `memo2`. When 1 entry changes in a 50,000-entry `Map`, only the $\log_2 N \approx 16$ modified spine nodes re-evaluate; every untouched subtree returns its **exact previous `SceneTree` heap pointer** in $O(1)$.
+3. **Pointer-equality `diffTree` + rotation reconciliation**: [Diff.hs](src/Game/EventHorizon/Diff.hs) checks `reallyUnsafePtrEquality#` at every `SceneTree` node, skipping untouched branches in $O(1)$. Any structural mismatches (such as `Data.Map` BST rotations) are reconciled over only the small $O(\Delta)$ mismatched leaves so rotations never trigger spurious body respawns.
+
+#### Measured Performance: With vs. Without Incremental Diffing
+
+**Real-World Stress Test — YoursCraft** (`cabal run yours-craft -- --bench`, alternating block place/break edits across 8×8 chunks `Map ChunkCoord (Map VoxelCoord BlockKind)`, measuring full render + diff + JSON wire encoding per click, GHC 9.6 `-O2`):
 
 | World Size | No Diffing (Full Scene JSON) | Naive Flat Diff (`bodies [...]`) | Memoized Chunked `SceneTree` (`mapTree`) | Speedup (Memo vs. No-Diff / Flat) |
 | ---: | ---: | ---: | ---: | ---: |
@@ -118,15 +151,11 @@ Every time you click to place or break a single block in **YoursCraft**, the wor
 | **10,192 blocks** (144 chunks) | `1,005.31 ms` · `4.2 MB` | `35.28 ms` · `700 B` | **`0.565 ms`** · **`700 B`** | **1,780×** / **62.5×** |
 | **44,865 blocks** (576 chunks) | `4,579.31 ms` · `18.6 MB` | `185.16 ms` · `700 B` | **`2.793 ms`** · **`700 B`** | **1,639×** / **66.3×** |
 
-- **No Diffing**: Rebuilding and serializing the full scene takes **4.6 seconds** and **18.6 MB** per click at 44,865 blocks—completely unplayable.
-- **Naive Flat Diff**: Server-side diffing slashes network payload **27,000×** (down to **700 bytes**), but walking an unmemoized flat list still costs **185 ms** per click (dropping >11 frames at 60 FPS).
-- **Memoized Chunked `SceneTree`**: Skipping untouched chunks in $O(1)$ via `memo` + `reallyUnsafePtrEquality#` brings the entire render + diff + JSON encode cycle down to **2.79 ms** at 44,865 blocks (**0.14 ms** at 1,706 blocks)—comfortably inside a single 16.6 ms 60 FPS frame.
+- Without diffing, a single click in a 44,865-block world takes **4.6 seconds** and **18.6 MB** of JSON.
+- Server-side flat diffing shrinks the wire payload **27,000×** (to **700 bytes**), but still burns **185 ms** walking all blocks.
+- Memoized chunked `SceneTree` diffing drops the full cycle to **2.79 ms** (**0.14 ms** at 1,706 blocks)—well within a single 16.6 ms 60 FPS frame.
 
-*(You can also press **`M`** live inside `yours-craft` to switch between Memoized Chunked `SceneTree` and Naive Flat Rebuild while playing.)*
-
-### Synthetic Microbenchmark (`cabal run event-horizon-bench`)
-
-Pure render + diff latency for 1 non-local entity mutation per step across 50 steps (GHC 9.6 `-O2`):
+**Synthetic Microbenchmark** (`cabal run event-horizon-bench`, pure render + diff latency for 1 non-local mutation per step across 50 steps, GHC 9.6 `-O2`):
 
 | Bodies ($N$) | Naive Flat Diff | `intMapTree` + `memo` | `mapTree` + `memo` |
 | ---: | ---: | ---: | ---: |
@@ -134,17 +163,22 @@ Pure render + diff latency for 1 non-local entity mutation per step across 50 st
 | **10,000** | `4.772 ms/step` | `0.1876 ms/step` (**25.4×**) | `0.0156 ms/step` (**306.0×**) |
 | **50,000** | `32.808 ms/step` | `0.1078 ms/step` (**304.4×**) | `0.0258 ms/step` (**1,271.6×**) |
 
+### 4. Deterministic Pure-State + Rapier3D Rollback Multiplayer
+
+Because `world` is a pure immutable Haskell value and Rapier3D supports deterministic binary snapshots, EventHorizon provides smooth client-side prediction without exposing netcode to the game author ([Rollback.hs](src/Game/EventHorizon/Rollback.hs), [MultiEngine.hs](src/Game/EventHorizon/MultiEngine.hs)):
+
+- **Identical deterministic physics**: Both the authoritative server (`serveMulti`) and clients run the exact same `@dimforge/rapier3d-compat` WASM binary at fixed 60 Hz integer ticks (`Tick = Word64`), with integer-tick timers (`TickTimers`) and canonically sorted collision pairs.
+- **Zero-copy history ring buffer**: Clients predict local inputs immediately (0 ms local lag) while retaining a 180-tick (3-second) ring buffer of `(hfWorld, hfSnapshot, hfTimers, hfInputs)` alongside Rapier3D's `takeSnapshot()` blobs. Snapshotting `world` is **$O(1)$** (just holding an immutable pointer—no user serialization!).
+- **Input-only best-case traffic**: In the nominal case, the server never sends game state—only stamped player inputs (`NetTickInputs`) and lightweight periodic confirmations (`NetConfirm tick stateHash` using a 1 mm quantized FNV-1a snapshot hash).
+- **Silent rollback + visual error smoothing**: If a delayed remote input arrives (or a hash mismatches), the client rewinds to the confirmed tick, restores the Rapier3D snapshot, silently fast-forwards to the current tick (re-running physics commands while deduplicating `PlaySound` via `dedupSounds`), and smoothly decays any visual position/rotation delta in Three.js over ~100 ms so objects glide instead of popping.
+
 ---
 
 ## Example Games
 
-All three example games are self-contained and serve a pre-built browser bundle (`static/bundle.js`).
-
-> **Prerequisites**: GHC ≥ 9.6, Cabal ≥ 3.0. Node.js is only needed if you run multiplayer modes (`--local-multi` / `--server` / `--connect`, which use the headless Rapier3D WASM sidecar) or rebuild `static/bundle.js`.
-
 ### 1. Sky Ace — 3D Flight & 2-Player Dogfight (`sky-ace`)
 
-Fly through a forested valley, shoot down patrolling wave targets, avoid crashing into trees or terrain, and optionally dogfight a second pilot in multiplayer.
+Fly through a forested valley, shoot down patrolling wave targets, avoid crashing into trees or terrain, and dogfight a second pilot in multiplayer.
 
 ```bash
 # Single-player — open http://localhost:3000
@@ -159,8 +193,7 @@ cabal run sky-ace -- --connect localhost:4000 --port 3000
 cabal run sky-ace -- --connect localhost:4000 --port 3001
 ```
 
-- **W / S** or **↑ / ↓**: Climb / Dive
-- **A / D** or **← / →**: Turn (with auto-banking)
+- **W / S** or **↑ / ↓**: Climb / Dive · **A / D** or **← / →**: Turn (with auto-banking)
 - **Shift**: Boost · **Space / Left Click**: Shoot · **R**: Restart
 
 ### 2. Chamber Shift — 3D Physics Puzzle (`chamber-shift`)
@@ -168,12 +201,10 @@ cabal run sky-ace -- --connect localhost:4000 --port 3001
 Solve **3 handcrafted 3D puzzle chambers** by pushing physics crates onto floor pressure plates, flipping airlock toggles, and racing timed pedestal switches to open sliding kinematic doors.
 
 ```bash
-cabal run chamber-shift
+cabal run chamber-shift   # open http://localhost:3001
 ```
 
-Open **http://localhost:3001**:
-- **WASD / Arrow Keys**: Walk & push crates
-- **E** or **Click nearby pedestal**: Press button
+- **WASD / Arrow Keys**: Walk & push crates · **E** or **Click nearby pedestal**: Press button
 - **R**: Reset level · **1 / 2 / 3**: Jump to Level 1, 2, or 3
 
 ### 3. Bastion Break — 3D Siege Demolition (`bastion-break`)
@@ -181,32 +212,24 @@ Open **http://localhost:3001**:
 Demolish **3 destructible 3D fortresses** by clicking directly on stone arches, timber towers, and TNT barrels to fire parabolic cannonballs and explosive bombs, triggering radial `ApplyImpulse` shockwaves and chain reactions to topple every Golden Idol.
 
 ```bash
-cabal run bastion-break
-# Optional: start with discrete FixedCamera steps instead of the smooth CameraPivot rig
-cabal run bastion-break -- --step-camera
+cabal run bastion-break                # open http://localhost:3002
+cabal run bastion-break -- --step-camera  # optional discrete FixedCamera mode
 ```
 
-Open **http://localhost:3002**:
-- **Left Click on fortress**: Fire ballistic shot directly at the clicked 3D point
+- **Left Click on fortress**: Fire ballistic shot at the clicked 3D point
 - **Q / Tab / Right Click**: Switch between Iron Cannonball and Explosive Bomb
-- **A / D** or **← / →**: Orbit camera around the island
-- **C**: Toggle live between smooth 60 FPS `CameraPivot` orbit and discrete `FixedCamera` steps
+- **A / D** or **← / →**: Orbit camera · **C**: Toggle Smooth `CameraPivot` vs. discrete `FixedCamera`
 - **Space / Enter**: Advance fortress · **R**: Retry · **1 / 2 / 3**: Select fortress
 
 ### 4. YoursCraft — 3D Voxel Builder & Diffing Stress Test (`yours-craft`)
 
-Explore a procedural chunked 3D voxel landscape of rolling hills, ridges, and trees, breaking and placing blocks on exact raycast faces—designed specifically to stress-test EventHorizon's incremental `SceneTree` + `memo` diffing engine.
+Explore a procedural chunked 3D voxel landscape of rolling hills, stone ridges, and trees, breaking and placing blocks on exact raycast faces—designed to stress-test incremental `SceneTree` + `memo` diffing.
 
 ```bash
-# Playable world (~1,700 blocks) — open http://localhost:3003
-cabal run yours-craft
-
-# Customize world radius or disable memoization live:
-cabal run yours-craft -- --radius 24 --port 3003
-cabal run yours-craft -- --no-memo
-
-# Run the built-in with-diffing vs without-diffing benchmark (~1.7k / 10k / 40k blocks):
-cabal run yours-craft -- --bench
+cabal run yours-craft                  # ~1,700 blocks — open http://localhost:3003
+cabal run yours-craft -- --radius 24   # larger world
+cabal run yours-craft -- --no-memo     # start in naive flat rebuild mode
+cabal run yours-craft -- --bench       # run No-Diff vs Flat-Diff vs Memo-Tree benchmark
 ```
 
 - **WASD / Arrow Keys**: Walk · **Space**: Jump (`ApplyImpulse`) · **Q / E**: Rotate camera
@@ -235,9 +258,9 @@ frontend/src/
   engine.js                       Three.js + Rapier3D browser runtime, Web Audio & visual error smoothing
   headless-physics.mjs            Headless Node Rapier3D WASM sidecar for deterministic server/client ticks
 examples/{sky-ace,chamber-shift,bastion-break,yours-craft}/  Four complete example games
-tutorial/sky-ace/                                7-step incremental Sky Ace tutorial & walkthrough
-bench/DiffBench.hs                               Large-scene incremental diff benchmark
-test/Spec.hs                                     Unit, diff, memo, gameplay, and rollback tests
+tutorial/sky-ace/                 7-step incremental Sky Ace tutorial & walkthrough
+bench/DiffBench.hs                Large-scene incremental diff benchmark
+test/Spec.hs                      Unit, diff, memo, gameplay, and rollback tests
 ```
 
 ---
@@ -248,8 +271,11 @@ test/Spec.hs                                     Unit, diff, memo, gameplay, and
 # Run the full test suite
 cabal test
 
-# Run the 1k / 10k / 50k body incremental diff benchmark
+# Run the synthetic 1k / 10k / 50k body diff benchmark
 cabal run event-horizon-bench
+
+# Run the YoursCraft real-world with-vs-without diffing benchmark
+cabal run yours-craft -- --bench
 
 # Rebuild static/bundle.js after editing frontend/src/engine.js
 npm --prefix ./frontend install
