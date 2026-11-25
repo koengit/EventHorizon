@@ -298,7 +298,7 @@ let currentLookAt = new THREE.Vector3(0, 0, 0);
 let primaryDirLight = null;
 let primaryDirLightOffset = new THREE.Vector3(25, 45, 20);
 
-const bodies = new Map(); // wireId (number) -> { id, spec, rb, rbHandle, colliders, colliderHandles, meshObj, physPos, physQuat, errPos, errQuat }
+const bodies = new Map(); // wireId (number) -> { id, spec, rb, rbHandle, colliders, colliderHandles, meshObj, prevPhysPos, prevPhysQuat, physPos, physQuat, errPos, errQuat }
 const colliderHandleToId = new Map(); // handle -> wireId
 const activeTimers = new Map(); // wireId -> { id, mode, interval, remaining, fired }
 const lastSentSnap = new Map(); // wireId -> { pos, rot, vel, angVel }
@@ -307,6 +307,9 @@ const rapierSnapshots = new Map(); // tick -> { simTime, bytes, bodiesMeta }
 const MAX_RAPIER_SNAPSHOTS = 180;
 const IDENTITY_QUAT = new THREE.Quaternion(0, 0, 0, 1);
 const MAX_SMOOTH_DIST_SQ = 15 * 15;
+const authPoseQueue = []; // authoritative mode 60 Hz pose frames for smooth interpolation
+let authInterpAcc = 0;
+let authHasFirstPose = false;
 
 let ws = null;
 let haskellEventCount = 0;
@@ -331,6 +334,9 @@ function resetWorld(gravityArr) {
   activeTimers.clear();
   lastSentSnap.clear();
   rapierSnapshots.clear();
+  authPoseQueue.length = 0;
+  authInterpAcc = 0;
+  authHasFirstPose = false;
   localTick = 0;
   cameraInitialized = false;
 
@@ -492,6 +498,13 @@ function spawnBody(spec) {
     colliders,
     colliderHandles,
     meshObj,
+    prevPhysPos: new THREE.Vector3(spec.pose.pos[0], spec.pose.pos[1], spec.pose.pos[2]),
+    prevPhysQuat: new THREE.Quaternion(
+      spec.pose.rot[0],
+      spec.pose.rot[1],
+      spec.pose.rot[2],
+      spec.pose.rot[3]
+    ),
     physPos: new THREE.Vector3(spec.pose.pos[0], spec.pose.pos[1], spec.pose.pos[2]),
     physQuat: new THREE.Quaternion(
       spec.pose.rot[0],
@@ -558,6 +571,20 @@ function applyBodyUpdate(u) {
           true
         );
       }
+      entry.prevPhysPos.set(u.pose.pos[0], u.pose.pos[1], u.pose.pos[2]);
+      entry.physPos.set(u.pose.pos[0], u.pose.pos[1], u.pose.pos[2]);
+      entry.prevPhysQuat.set(
+        u.pose.rot[0],
+        u.pose.rot[1],
+        u.pose.rot[2],
+        u.pose.rot[3]
+      );
+      entry.physQuat.set(
+        u.pose.rot[0],
+        u.pose.rot[1],
+        u.pose.rot[2],
+        u.pose.rot[3]
+      );
       entry.meshObj.position.set(u.pose.pos[0], u.pose.pos[1], u.pose.pos[2]);
       entry.meshObj.quaternion.set(
         u.pose.rot[0],
@@ -762,6 +789,8 @@ function executeCommands(commands, silent = false) {
         entry.rb.setTranslation({ x: p[0], y: p[1], z: p[2] }, true);
         entry.rb.setRotation({ x: r[0], y: r[1], z: r[2], w: r[3] }, true);
       }
+      entry.prevPhysPos.set(p[0], p[1], p[2]);
+      entry.prevPhysQuat.set(r[0], r[1], r[2], r[3]);
       entry.physPos.set(p[0], p[1], p[2]);
       entry.physQuat.set(r[0], r[1], r[2], r[3]);
       entry.errPos.set(0, 0, 0);
@@ -835,6 +864,8 @@ function applyVisualSmoothingFrom(savedVisuals) {
       const r = entry.rb.rotation();
       entry.physPos.set(t.x, t.y, t.z);
       entry.physQuat.set(r.x, r.y, r.z, r.w);
+      entry.prevPhysPos.copy(entry.physPos);
+      entry.prevPhysQuat.copy(entry.physQuat);
     }
     const diffPos = tmpVecA.copy(prev.pos).sub(entry.physPos);
     if (diffPos.lengthSq() <= MAX_SMOOTH_DIST_SQ) {
@@ -929,28 +960,95 @@ function applyReplaySteps(msg) {
   applyVisualSmoothingFrom(preVisuals);
 }
 
-function applyPoses(msg) {
-  const smooth = !!msg.smooth;
-  const poseMap = msg.poses || {};
+function applyAuthoritativePoseFrame(frameMsg, snapImmediate = false) {
+  const smooth = !!frameMsg.smooth;
+  const poseMap = frameMsg.poses || {};
+
+  // Shift every body's previous segment end into its new segment start so
+  // stationary bodies omitted from delta-encoded pose frames stay still.
+  for (const entry of bodies.values()) {
+    entry.prevPhysPos.copy(entry.physPos);
+    entry.prevPhysQuat.copy(entry.physQuat);
+  }
+
   for (const [idStr, p] of Object.entries(poseMap)) {
     const id = Number(idStr);
     const entry = bodies.get(id);
     if (!entry) continue;
-    const prevPos = tmpVecB.copy(entry.meshObj.position);
-    const prevQuat = tmpQuatB.copy(entry.meshObj.quaternion);
+    const prevVisPos = tmpVecB.copy(entry.meshObj.position);
+    const prevVisQuat = tmpQuatB.copy(entry.meshObj.quaternion);
     entry.physPos.set(p.pos[0], p.pos[1], p.pos[2]);
     entry.physQuat.set(p.rot[0], p.rot[1], p.rot[2], p.rot[3]);
+
+    // Never smear across large teleports or initial pose snap.
+    const stepDistSq = tmpVecA.copy(entry.physPos).sub(entry.prevPhysPos).lengthSq();
+    if (snapImmediate || stepDistSq > MAX_SMOOTH_DIST_SQ) {
+      entry.prevPhysPos.copy(entry.physPos);
+      entry.prevPhysQuat.copy(entry.physQuat);
+    }
+
     if (smooth) {
-      const diffPos = tmpVecA.copy(prevPos).sub(entry.physPos);
+      entry.prevPhysPos.copy(entry.physPos);
+      entry.prevPhysQuat.copy(entry.physQuat);
+      const diffPos = tmpVecA.copy(prevVisPos).sub(entry.physPos);
       if (diffPos.lengthSq() <= MAX_SMOOTH_DIST_SQ) {
         entry.errPos.copy(diffPos);
-        entry.errQuat.copy(prevQuat).multiply(tmpQuatA.copy(entry.physQuat).invert());
+        entry.errQuat.copy(prevVisQuat).multiply(tmpQuatA.copy(entry.physQuat).invert());
       } else {
         entry.errPos.set(0, 0, 0);
         entry.errQuat.copy(IDENTITY_QUAT);
       }
     }
   }
+}
+
+function applyPoses(msg) {
+  if (!authHasFirstPose) {
+    authHasFirstPose = true;
+    authInterpAcc = 0;
+    applyAuthoritativePoseFrame(msg, true);
+    return;
+  }
+  authPoseQueue.push(msg);
+  // Cap latency if browser tab was backgrounded and accumulated a backlog.
+  while (authPoseQueue.length > 6) {
+    applyAuthoritativePoseFrame(authPoseQueue.shift(), false);
+  }
+}
+
+function advanceAuthoritativeInterpolation(dt) {
+  if (authPoseQueue.length === 0) {
+    authInterpAcc = Math.min(FIXED_DT, authInterpAcc + dt);
+    return Math.max(0, Math.min(1, authInterpAcc / FIXED_DT));
+  }
+
+  // If the queue had momentarily run dry (holding at 1.0), start the newly
+  // arrived segment cleanly from 0 instead of snapping straight through it.
+  if (authInterpAcc >= FIXED_DT) {
+    applyAuthoritativePoseFrame(authPoseQueue.shift(), false);
+    authInterpAcc = 0;
+  }
+
+  const qLen = authPoseQueue.length;
+  // Adaptive playback speed keeps ~1 tick (16.7 ms) of jitter cushion so
+  // WebSocket arrival jitter never stalls or double-jumps a rendered frame.
+  let rate = 1.0;
+  if (qLen === 2) {
+    rate = 1.12;
+  } else if (qLen >= 3) {
+    rate = 1.35;
+  }
+
+  authInterpAcc += dt * rate;
+  while (authInterpAcc >= FIXED_DT && authPoseQueue.length > 0) {
+    applyAuthoritativePoseFrame(authPoseQueue.shift(), false);
+    authInterpAcc -= FIXED_DT;
+  }
+  if (authInterpAcc > FIXED_DT) {
+    authInterpAcc = FIXED_DT;
+  }
+
+  return Math.max(0, Math.min(1, authInterpAcc / FIXED_DT));
 }
 
 function applyDelta(msg, silent = false) {
@@ -1061,6 +1159,8 @@ const tmpVecB = new THREE.Vector3();
 const tmpVecC = new THREE.Vector3();
 const tmpQuatA = new THREE.Quaternion();
 const tmpQuatB = new THREE.Quaternion();
+const tmpInterpPos = new THREE.Vector3();
+const tmpInterpQuat = new THREE.Quaternion();
 
 function applyDrivesAndKinematics(dt) {
   for (const entry of bodies.values()) {
@@ -1222,16 +1322,30 @@ function stepPhysics(dt) {
   }
 }
 
-function syncVisuals(dt = FIXED_DT) {
-  const decay = Math.exp(-16 * Math.max(0.001, dt));
+function snapshotPrevPhysicsPoses() {
   for (const entry of bodies.values()) {
-    if (entry.rb && runtimeMode !== 'authoritative') {
+    if (entry.rb) {
+      entry.prevPhysPos.copy(entry.physPos);
+      entry.prevPhysQuat.copy(entry.physQuat);
+    }
+  }
+}
+
+function readCurrentPhysicsPoses() {
+  for (const entry of bodies.values()) {
+    if (entry.rb) {
       const t = entry.rb.translation();
       const r = entry.rb.rotation();
       entry.physPos.set(t.x, t.y, t.z);
       entry.physQuat.set(r.x, r.y, r.z, r.w);
     }
+  }
+}
 
+function syncVisuals(dt = FIXED_DT, interpAlpha = 1.0) {
+  const decay = Math.exp(-16 * Math.max(0.001, dt));
+  const t = Math.max(0, Math.min(1, interpAlpha));
+  for (const entry of bodies.values()) {
     if (entry.errPos.lengthSq() > 1e-6) {
       entry.errPos.multiplyScalar(decay);
     } else {
@@ -1245,8 +1359,10 @@ function syncVisuals(dt = FIXED_DT) {
     }
 
     if (entry.rb || runtimeMode === 'authoritative') {
-      entry.meshObj.position.copy(entry.physPos).add(entry.errPos);
-      entry.meshObj.quaternion.copy(entry.errQuat).multiply(entry.physQuat);
+      tmpInterpPos.lerpVectors(entry.prevPhysPos, entry.physPos, t);
+      tmpInterpQuat.slerpQuaternions(entry.prevPhysQuat, entry.physQuat, t);
+      entry.meshObj.position.copy(tmpInterpPos).add(entry.errPos);
+      entry.meshObj.quaternion.copy(entry.errQuat).multiply(tmpInterpQuat);
     }
   }
 }
@@ -1428,6 +1544,7 @@ async function main() {
     lastTime = now;
 
     if (physicsWorld) {
+      let interpAlpha = 1.0;
       if (runtimeMode !== 'authoritative') {
         accumulator += dt;
         let substeps = 0;
@@ -1436,12 +1553,17 @@ async function main() {
             takeRapierSnapshot(localTick);
             localTick += 1;
           }
+          snapshotPrevPhysicsPoses();
           stepPhysics(FIXED_DT);
+          readCurrentPhysicsPoses();
           accumulator -= FIXED_DT;
           substeps += 1;
         }
+        interpAlpha = Math.max(0, Math.min(1, accumulator / FIXED_DT));
+      } else {
+        interpAlpha = advanceAuthoritativeInterpolation(dt);
       }
-      syncVisuals(dt);
+      syncVisuals(dt, interpAlpha);
       updateCamera(dt);
     }
     renderer.render(threeScene, camera);
