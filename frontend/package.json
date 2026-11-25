@@ -1,0 +1,16 @@
+{
+  "name": "event-horizon-frontend",
+  "version": "0.0.1-alpha",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/engine.js --bundle --format=esm --outfile=../static/bundle.js --minify"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.14.0",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

@@ -1,0 +1,8 @@
+dist-newstyle/
+.cabal/
+.npm-cache/
+frontend/node_modules/
+.worktrees/
+WISH.md
+DESIGN.md
+RELATED_WORK.md

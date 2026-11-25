@@ -1,0 +1,157 @@
+cabal-version:      3.0
+name:               event-horizon
+version:            0.0.1.0
+synopsis:           Pure event-driven 3D game & physics library for Haskell
+description:        Write 3D action and puzzle games in Haskell using pure functions
+                    that only run on player input, physics events, and timers.
+                    Features type-safe user-defined entity/timer IDs, server-side
+                    scene diffing, delta physics snapshots, one-shot physics/audio
+                    commands, and a portable Three.js + Rapier3D browser runtime.
+license:            MIT
+build-type:         Simple
+data-files:
+    static/index.html
+    static/bundle.js
+
+common warnings
+    ghc-options: -Wall -Wno-unused-imports
+
+library
+    import:           warnings
+    exposed-modules:
+        Game.EventHorizon
+        Game.EventHorizon.Math
+        Game.EventHorizon.Types
+        Game.EventHorizon.Memo
+        Game.EventHorizon.Scene
+        Game.EventHorizon.Diff
+        Game.EventHorizon.Protocol
+        Game.EventHorizon.Engine
+        Game.EventHorizon.Multi
+        Game.EventHorizon.Rollback
+        Game.EventHorizon.MultiEngine
+    other-modules:
+        Paths_event_horizon
+    autogen-modules:
+        Paths_event_horizon
+    build-depends:
+        base >= 4.18 && < 5,
+        aeson >= 2.1,
+        bytestring >= 0.11,
+        containers >= 0.6,
+        directory >= 1.3,
+        filepath >= 1.4,
+        http-types >= 0.12,
+        process >= 1.6,
+        stm >= 2.5,
+        text >= 2.0,
+        wai >= 3.2,
+        wai-websockets >= 3.0,
+        warp >= 3.3,
+        websockets >= 0.12
+    hs-source-dirs:   src
+    default-language: GHC2021
+
+executable sky-ace
+    import:           warnings
+    main-is:          Main.hs
+    other-modules:    SkyAce
+    build-depends:
+        base >= 4.18 && < 5,
+        containers >= 0.6,
+        event-horizon,
+        text >= 2.0
+    hs-source-dirs:   examples/sky-ace
+    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+    default-language: GHC2021
+
+executable chamber-shift
+    import:           warnings
+    main-is:          Main.hs
+    other-modules:    ChamberShift
+    build-depends:
+        base >= 4.18 && < 5,
+        containers >= 0.6,
+        event-horizon,
+        text >= 2.0
+    hs-source-dirs:   examples/chamber-shift
+    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+    default-language: GHC2021
+
+executable bastion-break
+    import:           warnings
+    main-is:          Main.hs
+    other-modules:    BastionBreak
+    build-depends:
+        base >= 4.18 && < 5,
+        containers >= 0.6,
+        event-horizon,
+        text >= 2.0
+    hs-source-dirs:   examples/bastion-break
+    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+    default-language: GHC2021
+
+executable yours-craft
+    import:           warnings
+    main-is:          Main.hs
+    other-modules:    YoursCraft
+    build-depends:
+        base >= 4.18 && < 5,
+        bytestring >= 0.11,
+        containers >= 0.6,
+        event-horizon,
+        text >= 2.0
+    hs-source-dirs:   examples/yours-craft
+    ghc-options:      -O2 -threaded -rtsopts -with-rtsopts=-N
+    default-language: GHC2021
+
+test-suite event-horizon-test
+    import:           warnings
+    type:             exitcode-stdio-1.0
+    main-is:          Spec.hs
+    other-modules:
+        SkyAce
+        ChamberShift
+        BastionBreak
+        YoursCraft
+    build-depends:
+        base >= 4.18 && < 5,
+        aeson >= 2.1,
+        bytestring >= 0.11,
+        containers >= 0.6,
+        event-horizon,
+        text >= 2.0
+    hs-source-dirs:   test, examples/sky-ace, examples/chamber-shift, examples/bastion-break, examples/yours-craft
+    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+    default-language: GHC2021
+
+executable event-horizon-bench
+    import:           warnings
+    main-is:          DiffBench.hs
+    build-depends:
+        base >= 4.18 && < 5,
+        containers >= 0.6,
+        event-horizon
+    hs-source-dirs:   bench
+    ghc-options:      -O2 -rtsopts
+    default-language: GHC2021
+
+executable sky-ace-tutorial
+    import:           warnings
+    main-is:          Main.hs
+    other-modules:
+        Step01_FirstFlight
+        Step02_Controls
+        Step03_ForestAndCrash
+        Step04_ShootingAndTimers
+        Step05_TargetsAndMemo
+        Step06_CommandsAndAudio
+        Step07_Multiplayer
+    build-depends:
+        base >= 4.18 && < 5,
+        containers >= 0.6,
+        event-horizon,
+        text >= 2.0
+    hs-source-dirs:   tutorial/sky-ace
+    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+    default-language: GHC2021
